@@ -36,6 +36,7 @@ using Windows.Phone.UI.Input;
 using Windows.Storage;
 using Windows.UI.Notifications;
 using Shield.Core.Models;
+using System.IO;
 
 // The Blank Application template is documented at http://go.microsoft.com/fwlink/?LinkId=402347&clcid=0x409
 
@@ -56,13 +57,30 @@ namespace Shield
             InitializeComponent();
             Suspending += OnSuspending;
             Resuming += OnResuming;
+            UnhandledException += App_UnhandledException;
            
             if (Windows.Foundation.Metadata.ApiInformation.IsTypePresent("Windows.Phone.UI.Input.HardwareButtons"))
             {
                 HardwareButtons.BackPressed += HardwareButtons_BackPressed;
             }
 
-            TileUpdateManager.CreateTileUpdaterForApplication().EnableNotificationQueue(true);
+            try
+            {
+                TileUpdateManager.CreateTileUpdaterForApplication().EnableNotificationQueue(true);
+            }
+            catch (Exception)
+            {
+                // on device which doesn't have it... (core)
+            }
+        }
+
+        private void App_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            if (Debugger.IsAttached)
+            {
+                Debug.WriteLine(e.Message); 
+                Debug.WriteLine(e.Exception.StackTrace);
+            }
         }
 
         private async void OnResuming(object sender, object e)

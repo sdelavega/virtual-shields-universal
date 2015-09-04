@@ -27,14 +27,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using Windows.Media.SpeechRecognition;
-using Windows.Storage;
+using Windows.Networking;
 using Windows.System.Display;
 using Windows.UI.Core;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Input;
-using Windows.UI.Xaml.Media;
 using Windows.UI.Xaml.Navigation;
 using Newtonsoft.Json;
 using Shield.Communication;
@@ -44,8 +42,6 @@ using Shield.Core;
 using Shield.Core.Models;
 using Shield.Services;
 using Shield.ViewModels;
-using System.Diagnostics;
-using Windows.Graphics.Display;
 using Windows.UI.ViewManagement;
 using Microsoft.ApplicationInsights;
 
@@ -85,51 +81,123 @@ namespace Shield
         {
             Instance = this;
 
+            appSettings = (AppSettings)App.Current.Resources["appSettings"];
+
             InitializeComponent();
             model = new MainViewModel();
             dispatcher = CoreWindow.GetForCurrentThread().Dispatcher;
 
-            appSettings = (AppSettings) App.Current.Resources["appSettings"];
-
             Initialize();
-            StatusBar.GetForCurrentView().BackgroundOpacity = 0.50;
+
+            if (Windows.Foundation.Metadata.ApiInformation.IsTypePresent("Windows.Phone.UI.ViewManagement.StatusBar"))
+            {
+                if (StatusBar.GetForCurrentView() != null)
+                {
+                    StatusBar.GetForCurrentView().BackgroundOpacity = 0.50;
+                }
+            }
         }
 
         public Sensors Sensors { get; set; }
 
         private bool isRunning = false;
 
-        private void Initialize()
+        private Dictionary<string, ServiceBase> services = new Dictionary<string, ServiceBase>();
+
+        private int lastConnection = -1;
+
+        public async void SetService()
         {
-            //blobHelper = new BlobHelper(blobAccountName, blobAccountKey);
-
-            service = new Bluetooth();
-            service.OnConnect +=
-                async connection =>
-                {
-                    await SendResult(new SystemResultMessage("CONNECT"), "!!");
-                };
-
-            service.OnDisconnected += connection =>
+            if (appSettings.ConnectionIndex < 0)
             {
-                this.Disconnect();
-                // say disconnected... ? reconnecting ? onscreen or allow bt symbol to be all?
+                return;
+            }
+
+            ServiceBase.OnConnectHandler OnConnection = async connection =>
+            {
+                await SendResult(new SystemResultMessage("CONNECT"), "!!");
             };
 
-            service.Initialize( !appSettings.MissingBackButton );
-            ////service = new ServerClient(remoteHost, remoteService);
-            ////service.Initialize(); 
+            ServiceBase.OnConnectHandler OnDisconnected = connection =>
+            {
+                this.Disconnect();
+            };
 
+            if (lastConnection != appSettings.ConnectionIndex)
+            {
+                await
+                        dispatcher.RunAsync(CoreDispatcherPriority.Normal,
+                            () =>
+                            {
+                                appSettings.CurrentConnectionState = (int)ConnectionState.Disconnecting;
+                            });
+
+                this.Disconnect();
+                lastConnection = appSettings.ConnectionIndex;
+
+                await
+                        dispatcher.RunAsync(CoreDispatcherPriority.Normal,
+                            () =>
+                            {
+                                appSettings.CurrentConnectionState = (int)ConnectionState.NotConnected;
+                            });
+            }
+
+            if (service != null)
+            {
+                service.OnConnect -= OnConnection;
+                service.OnDisconnected -= OnDisconnected;
+            }
+
+            switch (appSettings.ConnectionIndex)
+            {
+                case AppSettings.CONNECTION_BLUETOOTH:
+                {
+                        service = services.ContainsKey("Bluetooth") ? services["Bluetooth"] : new Bluetooth();
+                        services["Bluetooth"] = service;
+                        break;
+                }
+                case AppSettings.CONNECTION_WIFI:
+                case AppSettings.CONNECTION_MANUAL:
+                {
+                        service = services.ContainsKey("Wifi") ? services["Wifi"] : new Wifi(AppSettings.BroadcastPort);
+                        services["Wifi"] = service;
+
+                        if (appSettings.ConnectionIndex == 2 && !string.IsNullOrWhiteSpace(appSettings.Hostname))
+                        {
+                            service.SetClient("added",
+                                new Connection("added",
+                                    new RemotePeer(null, new HostName(appSettings.Hostname), AppSettings.BroadcastPort.ToString() )));
+                        }
+                        break;
+                }
+                case AppSettings.CONNECTION_USB:
+                {
+                        service = new USB();
+                        break;
+                }
+                default:
+                {
+                    throw new NotImplementedException("Connection type (" + appSettings.ConnectionIndex +
+                                                      ") not supported");
+                }
+            }
+
+            service.OnConnect += OnConnection;
+            service.OnDisconnected += OnDisconnected;
+
+            service.Initialize(!appSettings.MissingBackButton);
+
+            service.ListenForBeacons();
             RefreshConnections();
+        }
 
+        private void Initialize()
+        {
             destinations = new List<IDestination>();
-
-            //ConnectionList = new Connections();
-            //connectList.ItemsSource = ConnectionList;
 
             DataContext = model;
             model.Sensors = new Sensors(dispatcher);
-            //SensorStack.ItemsSource = model.Sensors.ItemsList;
 
             MessageFactory.LoadClasses();
 
@@ -140,7 +208,6 @@ namespace Shield
             camera = new Camera();
             audio = new Audio();
 
-            CheckSensors();
             Sensors.OnSensorUpdated += Sensors_OnSensorUpdated;
             Sensors.Start();
 
@@ -158,7 +225,11 @@ namespace Shield
 
             isRunning = true;
 #pragma warning disable 4014
-            Task.Run(() => { AutoReconnect(); });
+            Task.Run(() =>
+            {
+                SetService();
+                AutoReconnect();
+            });
             Task.Run(() => { ProcessMessages(); });
 #pragma warning restore 4014
         }
@@ -183,7 +254,7 @@ namespace Shield
             var isConnecting = false;
             while (isRunning)
             {
-                if (!isConnecting && this.currentConnection == null && !IsInSettings)
+                if (!isConnecting && this.currentConnection == null && !IsInSettings && appSettings.AutoConnect)
                 {
                     var previousConnection = appSettings.PreviousConnectionName;
                     if (!string.IsNullOrWhiteSpace(previousConnection) && appSettings.ConnectionList.Count > 0)
@@ -197,6 +268,10 @@ namespace Shield
                             isConnecting = false;
                         }
                     }
+                }
+                else
+                {
+                    await Task.Delay(5000);
                 }
             }
         }
@@ -231,15 +306,6 @@ namespace Shield
             await service.SendMessage(builder.ToString(), data.Tag, 20);
         }
 
-        private void CheckSensors()
-        {
-            //this.noAcc.Visibility = Accelerometer.GetDefault() == null ? Visibility.Visible : Visibility.Collapsed;
-            //this.noGyro.Visibility = Gyrometer.GetDefault() == null ? Visibility.Visible : Visibility.Collapsed;
-            //this.noCom.Visibility = Compass.GetDefault() == null ? Visibility.Visible : Visibility.Collapsed;
-            //this.noLoc.Visibility = (new Geolocator()) == null ? Visibility.Visible : Visibility.Collapsed;
-            //this.noQuan.Visibility = OrientationSensor.GetDefault() == null ? Visibility.Visible : Visibility.Collapsed;
-        }
-
         private void InitializeManager()
         {
             manager = new Manager();
@@ -251,14 +317,23 @@ namespace Shield
         {
             try
             {
-                isCameraInitialized = true;
-                await
-                    dispatcher.RunAsync(CoreDispatcherPriority.Normal,
-                        async () => { await camera.InitializePreview(canvasBackground); });
+                if (!isCameraInitialized && !isCameraInitializing)
+                {
+                    await
+                        dispatcher.RunAsync(CoreDispatcherPriority.Normal,
+                            async () =>
+                            {
+                                await camera.InitializePreview(canvasBackground);
+                                isCameraInitialized = true;
+                                isCameraInitializing = false;
+                            });
+                }
             }
             catch (Exception)
             {
                 //camera not available
+                isCameraInitialized = false;
+                isCameraInitializing = false;
             }
         }
 
@@ -285,10 +360,15 @@ namespace Shield
         {
             Connections list;
 
+            if (service == null)
+            {
+                return;
+            }
+
             try
             {
                 list = await service.GetConnections();
-                if (list == null)
+                if (list == null || list.Count == 0)
                 {
                     appSettings.ConnectionList.Clear();
                     return;
@@ -296,7 +376,6 @@ namespace Shield
             }
             catch (Exception ex)
             {
-                //ConnectMessage.Text = "Service not available or supported.";
                 telemetry.TrackException(ex);
                 return;
             }
@@ -305,8 +384,6 @@ namespace Shield
             {
                 await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                 {
-                    //ConnectMessage.Text =
-                    //    "No devices found.";
                     telemetry.TrackEvent("VirtualShieldConnectionEnumerationFail");
                 });
 
@@ -320,8 +397,11 @@ namespace Shield
                 connections.Add(item);
             }
 
-            appSettings.ConnectionList = connections;
-            telemetry.TrackEvent("VirtualShieldConnectionEnumerationSuccess");
+            await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                appSettings.ConnectionList = connections;
+                telemetry.TrackEvent("VirtualShieldConnectionEnumerationSuccess");
+            });
         }
 
         public async void Disconnect()
@@ -340,6 +420,7 @@ namespace Shield
                 {
                     appSettings.CurrentConnectionState = (int)ConnectionState.NotConnected;
                 });
+
                 telemetry.TrackEvent("VirtualShieldDisconnect");
             }
         }
@@ -355,16 +436,16 @@ namespace Shield
 
             try
             {
+                bool worked = false;
                 await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                 {
                     appSettings.CurrentConnectionState = (int)ConnectionState.Connecting;
                 });
 
-                var worked = await service.Connect(selectedConnection);
-
-                await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                await dispatcher.RunAsync(CoreDispatcherPriority.Normal, async () =>
                 {
-                    //Refresh.IsEnabled = true;
+                    worked = await service.Connect(selectedConnection);
+
                     if (!worked)
                     {
                         appSettings.CurrentConnectionState = (int)ConnectionState.CouldNotConnect;
@@ -500,12 +581,6 @@ namespace Shield
             destinations.Add(blobDestination);
         }
 
-
-        //public void ReInitalizeCommunicationService()
-        //{
-        //    service.Initialize();
-        //    RefreshConnections();
-        //}
         public async void OnLaunchWhileActive(string arguments)
         {
             try

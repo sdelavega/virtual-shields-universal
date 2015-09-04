@@ -49,6 +49,7 @@ namespace Shield.Communication.Services
         public delegate void CharReceivedHandler(char message);
         public event CharReceivedHandler CharReceived;
         public int CharEventHandlerCount = 0;
+        internal Dictionary<string, Connection> clients = new Dictionary<string, Connection>();
 
         public bool IsClearToSend { get; set; }
 
@@ -59,20 +60,47 @@ namespace Shield.Communication.Services
 
         private Connection currentConnection = null;
         internal bool isPrePairedDevice = false;
+        private bool isFlushImplemented = true;
 
-        //JIM: Add a set of priorities with timestamps - send in order of : priority + oldest msg.
+        //todo: Add a set of priorities with timestamps - send in order of : priority + oldest msg.
         private Dictionary<string, PrioritizedMessage> queuedMessages = new Dictionary<string, PrioritizedMessage>();
         private Queue<string> queuedSends = new Queue<string>(); 
 
         public void Initialize(bool isPrePairedDevice)
         {
+            if (socket != null)
+            {
+                socket.Dispose();
+            }
+
             socket = new StreamSocket();
+
             this.isPrePairedDevice = isPrePairedDevice;
         }
 
         public void Terminate()
         {
+            isListening = false;
             this.Dispose();
+        }
+
+        public void SetClient(string name, Connection connection)
+        {
+            clients[name] = connection;
+        }
+
+        public void ClearClient(string name)
+        {
+            if (name == null)
+            {
+                clients.Clear();
+                return;
+            }
+
+            if (clients.ContainsKey(name))
+            {
+                clients.Remove(name);
+            }
         }
 
         public virtual Task<Connections> GetConnections()
@@ -80,8 +108,9 @@ namespace Shield.Communication.Services
             return new Task<Connections>(() => null);
         }
 
-        public void Disconnect(Connection connection)
+        public virtual void Disconnect(Connection connection)
         {
+            this.OnDisconnected?.Invoke(connection);
             Terminate();
         }
 
@@ -94,23 +123,67 @@ namespace Shield.Communication.Services
             return false;
         }
 
+        internal bool InstrumentSocket(StreamSocket socket)
+        {
+            return InstrumentSocket(socket.InputStream, socket.OutputStream);
+        }
+
+        internal bool InstrumentSocket(IInputStream input, IOutputStream output)
+        {
+            var result = false;
+
+            try
+            {
+                dataReader = new DataReader(input);
+                this.isListening = true;
+#pragma warning disable 4014
+                Task.Run(() => { ReceiveMessages(); });
+                Task.Run(() => { SendMessages(); });
+#pragma warning restore 4014
+                dataWriter = new DataWriter(output);
+                result = true;
+            }
+            catch (Exception e)
+            {
+                // socket failure can be recovered
+                Debug.WriteLine(e.Message);
+            }
+
+            return result;
+        }
+
         public async void ReceiveMessages()
         {
             try
             {
                 while (isListening)
                 {
-                    uint sizeFieldCount = await dataReader.LoadAsync(1);
+                    uint sizeFieldCount = 0;
+                    try
+                    {
+                        sizeFieldCount = await dataReader.LoadAsync(1);
+                    }
+                    catch (Exception e)
+                    {
+                        // ignore normal socket disconnections
+                        if (e.HResult != -2147023901)
+                        {
+                            throw;
+                        }
+
+                        continue;
+                    }
+
                     if (sizeFieldCount != 1)
                     {
-                        isListening = false;
-                        this.OnDisconnected?.Invoke(this.currentConnection);
+                        this.Disconnect(this.currentConnection);
                         break;
                     }
 
                     uint val = dataReader.ReadByte();
                     if (val < 255)
                     {
+                        Debug.Write(val.ToString()+",");
                         CharReceived?.Invoke((char)val);
                     }
                 }
@@ -118,8 +191,12 @@ namespace Shield.Communication.Services
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
+                this.Terminate();
             }
         }
+
+        private int msBetweenSends = 10;
+        private DateTime nextSend = DateTime.Now;
 
         public async void SendMessages()
         {
@@ -135,7 +212,6 @@ namespace Shield.Communication.Services
                         {
                             if (this.queuedSends.Count > 0)
                             {
-                                this.IsClearToSend = false;
                                 part = this.queuedSends.Dequeue();
                             }
                             else if (this.queuedMessages.Count > 0)
@@ -175,6 +251,7 @@ namespace Shield.Communication.Services
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
+                this.Terminate();
             }
         }
 
@@ -200,7 +277,18 @@ namespace Shield.Communication.Services
                 Debug.WriteLine("Sending: " + data);
                 dataWriter.WriteString(data);
                 await dataWriter.StoreAsync();
-                await dataWriter.FlushAsync();
+
+                if (isFlushImplemented)
+                {
+                    try
+                    {
+                        await dataWriter.FlushAsync();
+                    }
+                    catch (NotImplementedException)
+                    {
+                        isFlushImplemented = false;
+                    }
+                }
             }
         }
 
@@ -212,7 +300,12 @@ namespace Shield.Communication.Services
                 currentConnection = null;
                 isListening = false;
                 socket = null;
+                isFlushImplemented = true;
             }
+        }
+
+        public virtual void ListenForBeacons()
+        {
         }
     }
 }

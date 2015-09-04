@@ -33,7 +33,8 @@ using Windows.ApplicationModel.Email;
 using Windows.Data.Xml.Dom;
 using Windows.Devices.Geolocation;
 using Windows.Devices.Sensors;
-using Windows.Media.SpeechRecognition;
+﻿using Windows.Graphics.Display;
+﻿using Windows.Media.SpeechRecognition;
 using Windows.Phone.Devices.Notification;
 using Windows.Security.ExchangeActiveSyncProvisioning;
 using Windows.Storage;
@@ -66,6 +67,7 @@ namespace Shield
             new Dictionary<string, Dictionary<string, string>>();
 
         private Speech speechService;
+        public StringBuilder logger;
 
         private void QueueMessage(MessageBase message)
         {
@@ -172,6 +174,20 @@ namespace Shield
         {
             Log("R: " + message._Source + "\r\n");
 
+            try
+            {
+                if (message.Service != "SYSTEM")
+                {
+                    var dictionary = new Dictionary<string, string> {{"Type", message.Service}};
+                    telemetry.TrackEvent("MessageInfo", dictionary);
+                }
+            }
+            catch (Exception)
+            {
+                //ignore telemetry errors if any
+
+            }
+
             switch (message.Service)
             {
                 case "SYSTEM":
@@ -184,6 +200,9 @@ namespace Shield
                     }
                     else if (message.Action.Equals("START"))
                     {
+                        //reset orientation
+                        DisplayInformation.AutoRotationPreferences = DisplayOrientations.None;
+
                         //turn off all sensors, accept buffer length
                         var switches = new SensorSwitches {A = 0, G = 0, L = 0, M = 0, P = 0, Q = 0};
                         var sensors = new List<SensorSwitches>();
@@ -314,7 +333,7 @@ namespace Shield
                     }
                     else
                     {
-                        TakePicture(message as CameraMessage);
+                        await TakePicture(message as CameraMessage);
                     }
 
                     break;
@@ -726,8 +745,12 @@ namespace Shield
 
         private async void Log(string message)
         {
+            Debug.WriteLine(message);
+
             if (appSettings.IsLogging)
             {
+                var now = DateTime.Now;
+                logger.AppendLine(now.ToString("HH:mm:ss.fff:") + message);
                 await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => { appSettings.LogText = message; });
             }
         }
@@ -837,9 +860,10 @@ namespace Shield
                     sensorsMessage.Type = 'A';
                     if (Accelerometer.GetDefault() == null)
                     {
-                        throw new UnsupportedSensorException();
+                        throw new UnsupportedSensorException("Accelerometer does not exist");
                     }
 
+                    telemetry.TrackEvent("Sensor", new Dictionary<string, string> {{"A", sensorItem.A.Value.ToString()}});
                     Sensors.SensorSwitches.A = sensorItem.A.Value;
                 }
                 else if (sensorItem.G != null)
@@ -847,9 +871,10 @@ namespace Shield
                     sensorsMessage.Type = 'G';
                     if (Gyrometer.GetDefault() == null)
                     {
-                        throw new UnsupportedSensorException();
+                        throw new UnsupportedSensorException("Gyrometer does not exist");
                     }
 
+                    telemetry.TrackEvent("Sensor", new Dictionary<string, string> { { "G", sensorItem.G.Value.ToString() } });
                     Sensors.SensorSwitches.G = sensorItem.G.Value;
                 }
                 else if (sensorItem.M != null)
@@ -857,9 +882,10 @@ namespace Shield
                     sensorsMessage.Type = 'M';
                     if (Compass.GetDefault() == null)
                     {
-                        throw new UnsupportedSensorException();
+                        throw new UnsupportedSensorException("Compass does not exist");
                     }
 
+                    telemetry.TrackEvent("Sensor", new Dictionary<string, string> { { "M", sensorItem.M.Value.ToString() } });
                     Sensors.SensorSwitches.M = sensorItem.M.Value;
                 }
                 else if (sensorItem.L != null)
@@ -872,9 +898,10 @@ namespace Shield
                     sensorsMessage.Type = 'Q';
                     if (OrientationSensor.GetDefault() == null)
                     {
-                        throw new UnsupportedSensorException();
+                        throw new UnsupportedSensorException("OrientationSensor does not exist");
                     }
 
+                    telemetry.TrackEvent("Sensor", new Dictionary<string, string> { { "Q", sensorItem.Q.Value.ToString() } });
                     Sensors.SensorSwitches.Q = sensorItem.Q.Value;
                 }
                 else if (sensorItem.P != null)
@@ -882,9 +909,10 @@ namespace Shield
                     sensorsMessage.Type = 'P';
                     if (LightSensor.GetDefault() == null)
                     {
-                        throw new UnsupportedSensorException();
+                        throw new UnsupportedSensorException("LightSensor does not exist");
                     }
 
+                    telemetry.TrackEvent("Sensor", new Dictionary<string, string> { { "P", sensorItem.P.Value.ToString() } });
                     Sensors.SensorSwitches.P = sensorItem.P.Value;
                 }
 
@@ -902,7 +930,7 @@ namespace Shield
             vibrationDevice.Vibrate(new TimeSpan(0, 0, 0, timingMessage.Ms/1000, timingMessage.Ms%1000));
         }
 
-        private async void TakePicture(CameraMessage cameraMessage)
+        private async Task TakePicture(CameraMessage cameraMessage)
         {
             if (isCameraInitializing)
             {
@@ -917,13 +945,8 @@ namespace Shield
                     keysInProcess["CAMERA"] = true;
                 }
 
-                if (!isCameraInitialized)
-                {
-                    isCameraInitializing = true;
-                    await InitializeCamera();
-                    isCameraInitializing = false;
-                }
-
+                await InitializeCamera();
+                
                 var imageName = "photo_" + DateTime.Now.Ticks + ".jpg";
                 foreach (
                     var destination in destinations.Where(destination => destination.CheckPrefix(cameraMessage.Url)))
@@ -932,7 +955,27 @@ namespace Shield
                     break;
                 }
 
-                var stream = await camera.Capture(imageName);
+                StorageFile stream = null;
+                try
+                {
+                    var timeout = DateTime.Now.AddSeconds(5);
+                    while (!camera.isPreviewing && DateTime.Now < timeout)
+                    {
+                        await Task.Delay(250);
+                    }
+
+                    stream = await camera.Capture(imageName);
+                }
+                catch (Exception e)
+                {
+                    await SendResult(new ResultMessage(cameraMessage) {ResultId = -99, Result = e.Message });
+                    lock (keysInProcess)
+                    {
+                        keysInProcess["CAMERA"] = false;
+                    }
+
+                    return;
+                }
 
                 //stores the image in Azure BLOB Storage
                 var memStream = new MemoryStream();

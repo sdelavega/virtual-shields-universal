@@ -30,8 +30,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading.Tasks;
-using Windows.UI.Xaml;
 
 namespace Shield
 {
@@ -60,7 +58,7 @@ namespace Shield
 
         public static AppSettings Instance;
         private bool isLogging;
-        StringBuilder log = new StringBuilder();
+        private StringBuilder log = new StringBuilder();
 
         private bool isListening = false;
 
@@ -72,8 +70,17 @@ namespace Shield
             }
 
             var loader = new Windows.ApplicationModel.Resources.ResourceLoader();
-            ConnectionStateText = new[] { loader.GetString("NotConnected"), loader.GetString("Connecting"), loader.GetString("Connected"), loader.GetString("CouldNotConnect"), loader.GetString("Disconnecting") };
-            DeviceNames = new List<string> { loader.GetString("Bluetooth"), loader.GetString("ServerClient") };
+            ConnectionStateText = new[]
+            {
+                loader.GetString("NotConnected"), loader.GetString("Connecting"), loader.GetString("Connected"),
+                loader.GetString("CouldNotConnect"), loader.GetString("Disconnecting")
+            };
+            DeviceNames = new List<string>
+            {
+                loader.GetString("Bluetooth"),
+                loader.GetString("NetworkDiscovery"),
+                loader.GetString("NetworkDirect")
+            };
 
             try
             {
@@ -116,7 +123,14 @@ namespace Shield
             // If the key exists, retrieve the value.
             if (localSettings.Values.ContainsKey(Key))
             {
-                value = (T)localSettings.Values[Key];
+                try
+                {
+                    value = (T)localSettings.Values[Key];
+                }
+                catch (InvalidCastException)
+                {
+                    value = defaultValue;
+                }
             }
             else
             {
@@ -165,15 +179,39 @@ namespace Shield
 
         public int ConnectionIndex
         {
-            get { return GetValueOrDefault(0); }
-            set { AddOrUpdateValue(value);
+            get
+            {
+                return GetValueOrDefault(0);
+            }
+            set
+            {
+                AddOrUpdateValue(value);
+
                 OnPropertyChanged("BluetoothVisible");
-                OnPropertyChanged("NetworkVisible");
+                OnPropertyChanged("NetworkDirectVisible");
+                OnPropertyChanged("NotNetworkDirectVisible");
+
+                MainPage.Instance.SetService();
             }
         }
 
-        public bool BluetoothVisible { get { return ConnectionIndex == 0; } }
-        public bool NetworkVisible { get { return ConnectionIndex == 1; } }
+        internal const int CONNECTION_BLUETOOTH = 0;
+        internal const int CONNECTION_WIFI = 1;
+        internal const int CONNECTION_MANUAL = 2;
+        internal const int CONNECTION_USB = 3;
+        internal static readonly int BroadcastPort = 1235;
+
+        public string[] ConnectionItems => new[] {"Bluetooth", "Network", "Manual", "USB"};
+
+        public bool NotNetworkDirectVisible => !NetworkDirectVisible;
+
+        public bool BluetoothVisible => ConnectionIndex == 0;
+
+        public bool NetworkVisible => ConnectionIndex == 1;
+
+        public bool NetworkDirectVisible => ConnectionIndex == 2;
+
+        public bool USBVisible => ConnectionIndex == 3;
 
         public string Hostname
         {

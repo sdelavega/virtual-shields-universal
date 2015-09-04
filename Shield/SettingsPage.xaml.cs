@@ -24,13 +24,8 @@
 
 using Shield.Communication;
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text;
 using System.Threading.Tasks;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Navigation;
@@ -45,7 +40,7 @@ namespace Shield
     public sealed partial class SettingsPage : Page
     {
         private MainPage main;
-        private AppSettings appSettings = null;
+        private AppSettings appSettings;
     
         public SettingsPage()
         {
@@ -55,7 +50,7 @@ namespace Shield
 
             this.InitializeComponent();
 
-            appSettings.ConnectionIndex = Math.Max(0, index);
+            this.ConnectSelection.SelectedIndex = index;
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -113,8 +108,17 @@ namespace Shield
         private void Log_Click(object sender, RoutedEventArgs e)
         {
             appSettings.IsLogging = !appSettings.IsLogging;
+            if (appSettings.IsLogging)
+            {
+                main.logger = new StringBuilder();
+            }
+            else
+            {
+                appSettings.Log.Clear();
+                appSettings.LogText = main.logger.ToString();
+            }
         }
-        private void Log_Clear(object sender, RoutedEventArgs e)
+        private async void Log_Clear(object sender, RoutedEventArgs e)
         {
             appSettings.Log.Clear();
             appSettings.LogText = string.Empty;
@@ -125,7 +129,7 @@ namespace Shield
             main.CheckAlwaysRunning();
         }
 
-        private void updateDestinations(object sender, RoutedEventArgs e)
+        private void UpdateDestinations(object sender, RoutedEventArgs e)
         {
             main.UpdateDestinations();
         }
@@ -133,6 +137,11 @@ namespace Shield
         private void NavBack(object sender, RoutedEventArgs e)
         {
             this.Frame.GoBack();
+        }
+
+        private void Selector_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            appSettings.ConnectionIndex = ((ComboBox) sender).SelectedIndex;
         }
     }
 }
