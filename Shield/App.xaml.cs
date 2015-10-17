@@ -37,6 +37,8 @@ using Windows.Storage;
 using Windows.UI.Notifications;
 using Shield.Core.Models;
 using System.IO;
+using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.Extensibility;
 
 // The Blank Application template is documented at http://go.microsoft.com/fwlink/?LinkId=402347&clcid=0x409
 
@@ -54,6 +56,13 @@ namespace Shield
         /// </summary>
         public App()
         {
+            WindowsAppInitializer.InitializeAsync()
+                .ContinueWith(task =>
+                {
+                    TelemetryConfiguration.Active.TelemetryInitializers.Add(new UwpDeviceTelemetryInitializer());
+                })
+                .ContinueWith(task => { Telemetry = new TelemetryClient(); });
+
             InitializeComponent();
             Suspending += OnSuspending;
             Resuming += OnResuming;
@@ -130,6 +139,8 @@ namespace Shield
             // just ensure that the window is active
             if (rootFrame == null)
             {
+                Telemetry.TrackEvent("Launch");
+                
                 // Create a Frame to act as the navigation context and navigate to the first page
                 rootFrame = new Frame();
                 // Set the default language
@@ -212,6 +223,10 @@ namespace Shield
             deferral.Complete();
         }
 
-        
+        public static TelemetryClient Telemetry
+        {
+            get;
+            private set;
+        }
     }
 }
