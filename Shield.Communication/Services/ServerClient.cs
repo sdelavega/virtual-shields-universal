@@ -21,36 +21,35 @@
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
     THE SOFTWARE.
 */
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Windows.Networking;
-using Windows.Networking.Sockets;
-using Windows.Storage.Streams;
-
 namespace Shield.Communication.Services
 {
+    using System;
+    using System.Linq;
+    using System.Threading.Tasks;
+
+    using Windows.Networking;
+    using Windows.Networking.Sockets;
+    using Windows.Storage.Streams;
+
     public class ServerClient : ServiceBase
     {
-        private string remoteHost = "";
-        private string remoteService = "";
-        
+        private readonly string remoteHost = string.Empty;
+
+        private readonly string remoteService = string.Empty;
+
         public ServerClient(string rHost, string rService)
         {
-          this.remoteHost = rHost;
-          this.remoteService = rService;
+            this.remoteHost = rHost;
+            this.remoteService = rService;
         }
 
         public override async Task<Connections> GetConnections()
         {
-            var remoteHostName = new HostName(remoteHost);
-            var endpointList = await DatagramSocket.GetEndpointPairsAsync(remoteHostName, remoteService);
+            var remoteHostName = new HostName(this.remoteHost);
+            var endpointList = await DatagramSocket.GetEndpointPairsAsync(remoteHostName, this.remoteService);
             var epair = endpointList.First();
 
-            var connections = new Connections {new Connection("Server", epair)};
+            var connections = new Connections { new Connection("Server", epair) };
 
             return connections;
         }
@@ -58,32 +57,33 @@ namespace Shield.Communication.Services
         public override Task<bool> Connect(Connection newConnection)
         {
             // this re-enables after the disconnect scenario
-            if (socket == null)
+            if (this.socket == null)
             {
-                socket = new StreamSocket();
+                this.socket = new StreamSocket();
             }
 
             var peer = newConnection.Source as EndpointPair;
-            return Connect(peer);
+            return this.Connect(peer);
         }
 
         private async Task<bool> Connect(EndpointPair epair)
         {
-            if (socket != null)
+            if (this.socket != null)
             {
                 try
                 {
-                    await socket.ConnectAsync(epair);
-                    dataReader = new DataReader(socket.InputStream);
-                    dataReader.InputStreamOptions = InputStreamOptions.Partial;
+                    await this.socket.ConnectAsync(epair);
+                    this.dataReader = new DataReader(this.socket.InputStream);
+                    this.dataReader.InputStreamOptions = InputStreamOptions.Partial;
 #pragma warning disable 4014
-                    Task.Run(() => { ReceiveMessages(); });
+                    Task.Run(() => { this.ReceiveMessages(); });
 #pragma warning restore 4014
-                    dataWriter = new DataWriter(socket.OutputStream);
+                    this.dataWriter = new DataWriter(this.socket.OutputStream);
                     return true;
                 }
                 catch (Exception)
                 {
+                    // multiple messages across protocols, all valid for not connecting
                 }
             }
 

@@ -21,104 +21,125 @@
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
     THE SOFTWARE.
 */
-
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-using Windows.Networking;
-using Windows.Networking.Proximity;
-using Windows.Networking.Sockets;
-using Windows.Storage.Streams;
-
 namespace Shield.Communication.Services
 {
+    using System;
+    using System.Diagnostics;
+    using System.Threading;
+    using System.Threading.Tasks;
+
+    using Windows.Devices.Bluetooth.Rfcomm;
+    using Windows.Devices.Enumeration;
+    using Windows.Networking;
+    using Windows.Networking.Proximity;
+    using Windows.Networking.Sockets;
+
     public class Bluetooth : ServiceBase
     {
         public Bluetooth()
         {
-            isPollingToSend = true;
+            this.isPollingToSend = true;
         }
 
         public override async Task<Connections> GetConnections()
         {
-            if (isPrePairedDevice)
+            if (this.isPrePairedDevice)
             {
-                PeerFinder.AlternateIdentities["Bluetooth:Paired"] = "";
+                PeerFinder.AlternateIdentities["Bluetooth:Paired"] = string.Empty;
             }
 
             try
             {
-                PeerFinder.AllowBluetooth = true;
-                PeerFinder.AllowWiFiDirect = true;
-                PeerFinder.DisplayName = "Virtual Shields";
-                PeerFinder.Role = PeerRole.Peer;
-                if (!isPrePairedDevice)
-                {
-                    PeerFinder.Start();
-                }
+                var devices = RfcommDeviceService.GetDeviceSelector(RfcommServiceId.SerialPort);
+                var peers = await DeviceInformation.FindAllAsync(devices);
 
-                var peers = await PeerFinder.FindAllPeersAsync();
                 var connections = new Connections();
                 foreach (var peer in peers)
                 {
-                    connections.Add(new Connection(peer.DisplayName, peer));
+                    connections.Add(new Connection(peer.Name, peer));
                 }
 
                 return connections;
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                Debug.WriteLine("GetConnections: pairing failed: " + e);
                 return null;
             }
-
         }
 
         public override async Task<bool> Connect(Connection newConnection)
         {
-            var peer = newConnection.Source as PeerInformation;
-            var result = await Connect(peer.HostName);
-            await base.Connect(newConnection);
+            var result = false;
+            try
+            {
+                HostName hostName = null;
+                string remoteServiceName = null;
+
+                var peer = newConnection.Source as PeerInformation;
+                if( peer != null )
+                {
+                    hostName = peer.HostName;
+                    remoteServiceName = "1";
+                }
+                else
+                {
+                    var deviceInfo = newConnection.Source as DeviceInformation;
+                    if( deviceInfo != null )
+                    {
+                        var service = await RfcommDeviceService.FromIdAsync(deviceInfo.Id);
+                        if( service == null )
+                        {
+                            return false;
+                        }
+
+                        hostName = service.ConnectionHostName;
+                        remoteServiceName = service.ConnectionServiceName;
+                    }
+                }
+
+                if( hostName != null )
+                {
+                    result = await this.Connect(hostName, remoteServiceName);
+                    await base.Connect(newConnection);
+                }
+            }
+            catch (Exception)
+            {
+                //ignore bad connection, return false
+            }
+
             return result;
         }
 
-        private async Task<bool> Connect(HostName deviceHostName)
+        private async Task<bool> Connect(HostName deviceHostName, string remoteServiceName)
         {
-            if (!isListening)
+            if (!this.isListening)
             {
-                if (socket == null)
+                if (this.socket == null)
                 {
-                    socket = new StreamSocket();
+                    this.socket = new StreamSocket();
                 }
 
-                if (socket != null)
+                if (this.socket != null)
                 {
                     try
                     {
-                        CancellationTokenSource cts = new CancellationTokenSource();
+                        var cts = new CancellationTokenSource();
                         cts.CancelAfter(10000);
-                        await socket.ConnectAsync(deviceHostName, "1");
-                        dataReader = new DataReader(socket.InputStream);
-                        this.isListening = true;
-#pragma warning disable 4014
-                        Task.Run(() => { ReceiveMessages(); });
-                        Task.Run(() => { SendMessages(); });
-#pragma warning restore 4014
-                        dataWriter = new DataWriter(socket.OutputStream);
-
-                        return true;
+                        await this.socket.ConnectAsync(deviceHostName, remoteServiceName);
+                        return this.InstrumentSocket(this.socket);
                     }
-                    catch (Exception)
+                    catch (Exception e)
                     {
-                        //log
+                        Debug.WriteLine("Connect: connection failed: " + e);
                     }
                 }
 
                 return false;
             }
-            else
-            {
-                return true;
-            }
+
+            return true;
         }
     }
 }

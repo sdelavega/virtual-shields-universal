@@ -21,140 +21,179 @@
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
     THE SOFTWARE.
 */
-
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using Shield.Core.Models;
-
 namespace Shield.Core
 {
+    using System;
+    using System.Diagnostics;
+    using System.Text;
+
+    using Shield.Core.Models;
+
     public class Manager
     {
-        public delegate void StringReceivedHandler(string message);
         public delegate void MessageReceivedHandler(MessageBase message);
 
-        public event StringReceivedHandler StringReceived;
-        public event MessageReceivedHandler MessageReceived;
+        public delegate void StringReceivedHandler(string message);
 
-        private int braceCount = 0;
-        private bool quoted = false;
+        private readonly StringBuilder buffer = new StringBuilder();
+
+        private readonly long maximumTimeToFullMessage = 1000;
+
+        private readonly char quotechar1 = '\'';
+
+        private readonly char quotechar2 = '\"';
+
+        private int braceCount;
+
         private char currentQuoteChar = ' ';
-        private char quotechar1 = '\'';
-        private char quotechar2 = '\"';
-        private bool isEscaped = false;
-        private StringBuilder buffer = new StringBuilder();
-        private long lastGoodMessage = 0;
-        private long lastStartMessage = 0;
-        private long maximumTimeToFullMessage = 1000;
+
+        private bool isClosedMessage;
+
+        private bool isEscaped;
+
+        private long lastCompleteMessage = Environment.TickCount;
+
+        private long lastGoodMessage;
+
+        private long lastStartMessage;
+
+        private object messageLock = new object();
+
+        private bool quoted;
+
+        public event StringReceivedHandler StringReceived;
+
+        public event MessageReceivedHandler MessageReceived;
 
         public void Test()
         {
-            //OnStringReceived("{ 'Service': 'SMS', 'To': '+14255330004', 'Message': 'Abc' }");
-            //OnStringReceived("{ 'Service': 'LCDT', 'Message': 'Hi There. Testing Line 0.', 'X': 0, 'Y': 0 }");
-            //OnCharsReceived("{ 'Service': 'LCDT', 'Message': 'Testing Line 1', 'X': 0, 'Y': 1 }");
-            //OnStringReceived("{ 'Service': 'SPEECH', 'Message': 'Hi There. Speech to text works.' }");
-            //OnCharsReceived("{ 'Service': 'URL', 'Address': 'http://www.cnn.com' }");
-            //OnCharsReceived("{ 'Service': 'SENSORS', 'Sensors': [ {'A' : true} ] }");
-            //OnCharsReceived("{ 'Service': 'CAMERA' }");
-            //OnCharsReceived("{ 'Service': 'RECOGNIZE' }");
-            //OnCharsReceived("{ 'Service': 'RECORDAUDIO', 'Ms': 5000 }");
-            OnStringReceived("{ 'Service': 'PLAY', 'Url': 'Videos:wildlife.mp4' }");
+            // OnStringReceived("{ 'Service': 'SMS', 'To': '+14255330004', 'Message': 'Abc' }");
+            // OnStringReceived("{ 'Service': 'LCDT', 'Message': 'Hi There. Testing Line 0.', 'X': 0, 'Y': 0 }");
+            // OnCharsReceived("{ 'Service': 'LCDT', 'Message': 'Testing Line 1', 'X': 0, 'Y': 1 }");
+            // OnStringReceived("{ 'Service': 'SPEECH', 'Message': 'Hi There. Speech to text works.' }");
+            // OnCharsReceived("{ 'Service': 'URL', 'Address': 'http://www.cnn.com' }");
+            // OnCharsReceived("{ 'Service': 'SENSORS', 'Sensors': [ {'A' : true} ] }");
+            // OnCharsReceived("{ 'Service': 'CAMERA' }");
+            // OnCharsReceived("{ 'Service': 'RECOGNIZE' }");
+            // OnCharsReceived("{ 'Service': 'RECORDAUDIO', 'Ms': 5000 }");
+            this.OnStringReceived("{ 'Service': 'PLAY', 'Url': 'Videos:wildlife.mp4' }");
         }
 
         public void OnCharsReceived(string part)
         {
             foreach (var c in part)
             {
-                OnCharReceived(c);
+                this.OnCharReceived(c);
             }
         }
 
         private void OnCharReceived(char c)
         {
             var isComplete = false;
-            
-            if (isEscaped)
+            var isPreClosedMessage = false;
+
+            if (this.isEscaped)
             {
-                isEscaped = false;
+                this.isEscaped = false;
             }
-            else if (quoted && c == currentQuoteChar)
+            else if (this.quoted && c == this.currentQuoteChar)
             {
-                quoted = !quoted;
+                this.quoted = !this.quoted;
             }
-            else if (!quoted && c == quotechar1)
+            else if (!this.quoted && c == this.quotechar1)
             {
-                quoted = true;
-                currentQuoteChar = quotechar1;
+                this.quoted = true;
+                this.currentQuoteChar = this.quotechar1;
             }
-            else if (!quoted && c == quotechar2)
+            else if (!this.quoted && c == this.quotechar2)
             {
-                quoted = true;
-                currentQuoteChar = quotechar2;
+                this.quoted = true;
+                this.currentQuoteChar = this.quotechar2;
             }
-            else if (!quoted && c == '{')
+            else if (!this.quoted && c == '{')
             {
-                if (braceCount++ == 1)
+                isPreClosedMessage = true;
+                if (this.braceCount++ == 1)
                 {
-                    lastStartMessage = System.Environment.TickCount;
+                    this.lastStartMessage = Environment.TickCount;
                 }
             }
-            else if (!quoted && c == '}')
+            else if (!this.quoted && c == '}')
             {
-                if (--braceCount < 1)
+                if (this.isClosedMessage && this.buffer.Length > 1
+                    && (Environment.TickCount - this.lastCompleteMessage > 1000 * 5))
                 {
-                    lastGoodMessage = System.Environment.TickCount;
-                    braceCount = 0;
+                    // reset
+                    this.buffer.Clear();
+                    this.braceCount = 0;
+                    this.isClosedMessage = false;
+                    this.quoted = false;
+                    return;
+                }
+
+                if (--this.braceCount < 1)
+                {
+                    this.lastGoodMessage = Environment.TickCount;
+                    this.braceCount = 0;
                     isComplete = true;
                 }
-                else if (lastStartMessage + maximumTimeToFullMessage > System.Environment.TickCount)
+                else if (this.lastStartMessage + this.maximumTimeToFullMessage > Environment.TickCount)
                 {
-                    //timeout of messages
-                    lastGoodMessage = System.Environment.TickCount;
-                    braceCount = 0;
+                    // timeout of messages
+                    this.lastGoodMessage = Environment.TickCount;
+                    this.braceCount = 0;
                 }
             }
             else if (c == '\\')
             {
-                isEscaped = true;
+                this.isEscaped = true;
             }
 
-            buffer.Append(c);
+            this.isClosedMessage = isPreClosedMessage;
+
+            this.buffer.Append(c);
             if (isComplete)
             {
-                OnStringReceived(buffer.ToString());
-                buffer.Clear();
+                Debug.WriteLine(string.Empty);
+                this.OnStringReceived(this.buffer.ToString());
+                this.buffer.Clear();
+            }
+
+            if (c == '}' && (Environment.TickCount - this.lastCompleteMessage > 1000 * 10))
+            {
+                // reset
+                this.buffer.Clear();
+                this.braceCount = 0;
+                this.isClosedMessage = false;
+                this.quoted = false;
             }
         }
 
         public void OnStringReceived(string message)
         {
+            this.lastCompleteMessage = Environment.TickCount;
             Debug.WriteLine(message);
-            StringReceived?.Invoke(message);
+            this.StringReceived?.Invoke(message);
 
             if (message.Length > 2)
             {
-                //eliminate badly embedded characters if found
-                message = message.Replace("{}", "");
+                // eliminate badly embedded characters if found
+                message = message.Replace("{}", string.Empty);
 
                 var msg = MessageFactory.FromMessage(message);
                 if (msg != null)
                 {
-                    OnMessageReceived(msg);
+                    this.OnMessageReceived(msg);
                 }
             }
         }
-
-        private object messageLock = new object();
 
         protected void OnMessageReceived(MessageBase message)
         {
             // If the message was valid, invoke MessageReceived
             if (message != null)
             {
-                MessageReceived?.Invoke(message);
+                this.MessageReceived?.Invoke(message);
             }
         }
     }

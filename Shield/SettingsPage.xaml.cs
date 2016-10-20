@@ -21,62 +21,54 @@
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
     THE SOFTWARE.
 */
-
-using Shield.Communication;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices.WindowsRuntime;
-using System.Threading.Tasks;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
-using Windows.UI.Xaml;
-using Windows.UI.Xaml.Controls;
-using Windows.UI.Xaml.Navigation;
-
-// The Blank Page item template is documented at http://go.microsoft.com/fwlink/?LinkId=234238
-
 namespace Shield
 {
-    /// <summary>
-    /// An empty page that can be used on its own or navigated to within a Frame.
-    /// </summary>
+    using System;
+    using System.Text;
+    using System.Threading.Tasks;
+
+    using Shield.Communication;
+
+    using Windows.UI.Xaml;
+    using Windows.UI.Xaml.Controls;
+    using Windows.UI.Xaml.Navigation;
+
     public sealed partial class SettingsPage : Page
     {
-        private MainPage main;
-        private AppSettings appSettings = null;
-    
+        private readonly AppSettings appSettings;
+
+        private readonly MainPage main;
+
         public SettingsPage()
         {
-            main = MainPage.Instance;
-            appSettings = (AppSettings)App.Current.Resources["appSettings"];
-            var index = appSettings.ConnectionIndex;
+            this.main = MainPage.Instance;
+            this.appSettings = (AppSettings)Application.Current.Resources["appSettings"];
+            var index = this.appSettings.ConnectionIndex;
 
             this.InitializeComponent();
 
-            appSettings.ConnectionIndex = Math.Max(0, index);
+            this.ConnectSelection.SelectedIndex = index;
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
-            main.IsInSettings = true;
-            main.RefreshConnections();
+            this.main.IsInSettings = true;
+            this.main.RefreshConnections();
             base.OnNavigatedTo(e);
         }
 
         protected override void OnNavigatingFrom(NavigatingCancelEventArgs e)
         {
-            main.IsInSettings = false;
+            this.main.IsInSettings = false;
             base.OnNavigatingFrom(e);
         }
 
         private async void Reconnect_Click(object sender, RoutedEventArgs e)
         {
-            if (connectList.SelectedItem != null)
+            if (this.connectList.SelectedItem != null)
             {
-                var selectedConnection = connectList.SelectedItem as Connection;
-                var result = await main.Connect(selectedConnection);
+                var selectedConnection = this.connectList.SelectedItem as Connection;
+                var result = await this.main.Connect(selectedConnection);
                 if (result)
                 {
                     await Task.Delay(2000);
@@ -88,7 +80,7 @@ namespace Shield
                         }
                         catch (Exception)
                         {
-                            //ignore no back
+                            // ignore no back
                         }
                     }
                 }
@@ -97,42 +89,57 @@ namespace Shield
 
         private void Refresh_Click(object sender, RoutedEventArgs e)
         {
-            main.RefreshConnections();
+            this.main.RefreshConnections();
         }
 
         private void Disconnect_Click(object sender, RoutedEventArgs e)
         {
-            appSettings.PreviousConnectionName = string.Empty;
+            this.appSettings.PreviousConnectionName = string.Empty;
 
-            if (main.currentConnection != null)
+            if (this.main.currentConnection != null)
             {
-                main.Disconnect();
+                this.main.Disconnect();
             }
         }
 
         private void Log_Click(object sender, RoutedEventArgs e)
         {
-            appSettings.IsLogging = !appSettings.IsLogging;
+            this.appSettings.IsLogging = !this.appSettings.IsLogging;
+            if (this.appSettings.IsLogging)
+            {
+                this.main.logger = new StringBuilder();
+            }
+            else
+            {
+                this.appSettings.Log.Clear();
+                this.appSettings.LogText = this.main.logger.ToString();
+            }
         }
+
         private void Log_Clear(object sender, RoutedEventArgs e)
         {
-            appSettings.Log.Clear();
-            appSettings.LogText = string.Empty;
+            this.appSettings.Log.Clear();
+            this.appSettings.LogText = string.Empty;
         }
 
         private void AlwaysRunning_Toggled(object sender, RoutedEventArgs e)
         {
-            main.CheckAlwaysRunning();
+            this.main.CheckAlwaysRunning();
         }
 
-        private void updateDestinations(object sender, RoutedEventArgs e)
+        private void UpdateDestinations(object sender, RoutedEventArgs e)
         {
-            main.UpdateDestinations();
+            this.main.UpdateDestinations();
         }
 
         private void NavBack(object sender, RoutedEventArgs e)
         {
             this.Frame.GoBack();
+        }
+
+        private void Selector_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            this.appSettings.ConnectionIndex = ((ComboBox)sender).SelectedIndex;
         }
     }
 }
